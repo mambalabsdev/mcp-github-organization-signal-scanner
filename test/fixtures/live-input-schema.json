@@ -1,0 +1,131 @@
+{
+  "_provenance": {
+    "actorId": "ahF8RRpv5mzPao5CN",
+    "buildId": "hhL2X2tUcmTaLS3kD",
+    "buildNumber": "0.2.7",
+    "readAt": "2026-10-05T15:41:18.439Z"
+  },
+  "title": "GitHub Organization Signal Scanner - Domain to Org Input",
+  "description": "Give a company domain. Returns the company GitHub organization plus repository and activity signals in one flat row. Runs without a token at 60 requests per hour; add your own GitHub token for 5,000. Free Apify plan users get 1000 results per calendar month, reset monthly. Upgrade to any paid Apify plan for unlimited use: https://apify.com/pricing?fpr=mamba",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "company_domain": {
+      "title": "Company Domain",
+      "type": "string",
+      "description": "Bare company domain, for example stripe.com. This is the only required input and it is the join key for every other actor in the fleet.",
+      "editor": "textfield",
+      "prefill": "stripe.com"
+    },
+    "company_name": {
+      "title": "Company Name",
+      "type": "string",
+      "description": "Optional but strongly recommended. It is what the identity gate checks a discovered record against, so supplying it is the single cheapest way to reduce wrong matches.",
+      "editor": "textfield",
+      "prefill": "Stripe"
+    },
+    "github_org": {
+      "title": "GitHub Organization",
+      "type": "string",
+      "description": "Optional. If you already know the organization login, for example \"stripe\", put it here and the actor skips discovery entirely and goes straight to the API, which is faster and spends fewer of your rate limited requests.",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "includeRepoDetail": {
+      "title": "Include Repository Detail",
+      "type": "string",
+      "description": "When \"true\" (default) the organization repositories are read and the language, star, activity and SDK signals are derived from them. Set \"false\" to return the organization record only, which is one request instead of several and is much friendlier to the unauthenticated rate limit. Sent as a string for Clay compatibility.",
+      "editor": "select",
+      "enum": [
+        "true",
+        "false"
+      ],
+      "enumTitles": [
+        "true (organization plus repository signals)",
+        "false (organization record only, one request)"
+      ],
+      "default": "true"
+    },
+    "includeContributorEstimate": {
+      "title": "Include Contributor Estimate",
+      "type": "string",
+      "description": "When \"true\" the actor spends one extra request to read the contributor count of the organization most starred repository, as a floor on the size of its public engineering surface. Default \"false\", because one extra request per company is real money against a 60 per hour unauthenticated budget. Sent as a string for Clay compatibility.",
+      "editor": "select",
+      "enum": [
+        "false",
+        "true"
+      ],
+      "enumTitles": [
+        "false (skip, saves a request per company)",
+        "true (one extra request per company)"
+      ],
+      "default": "false"
+    },
+    "activeWindowDays": {
+      "title": "Active Window Days",
+      "type": "string",
+      "description": "How recently a repository must have been pushed to count as active. 90 days by default. This changes what \"active\" means on the row, so pick the window your own definition of an engaged engineering team uses. Sent as a string for Clay compatibility.",
+      "editor": "select",
+      "enum": [
+        "30",
+        "90",
+        "180",
+        "365"
+      ],
+      "enumTitles": [
+        "30 days (currently shipping)",
+        "90 days (default)",
+        "180 days",
+        "365 days (any activity this year)"
+      ],
+      "default": "90"
+    },
+    "repoPageBudget": {
+      "title": "Repository Page Budget",
+      "type": "string",
+      "description": "How many pages of 100 repositories to read for a large organization. This is a cost and completeness dial, not a change of answer: the row always reports how many repositories were actually sampled and whether the sample is complete. Sent as a string for Clay compatibility.",
+      "editor": "select",
+      "enum": [
+        "1",
+        "2",
+        "3",
+        "5"
+      ],
+      "enumTitles": [
+        "1 page (100 repos)",
+        "2 pages (200 repos)",
+        "3 pages (300 repos, default)",
+        "5 pages (500 repos)"
+      ],
+      "default": "3"
+    },
+    "githubToken": {
+      "title": "GitHub Token",
+      "type": "string",
+      "description": "YOUR OWN GitHub personal access token, free to create at github.com/settings/tokens with no scopes at all for public data. OPTIONAL: without it the actor runs at GitHub 60 requests per hour, which is enough for a handful of companies and not enough for a list. With it the limit is 5,000 per hour. It is marked secret, so the value never renders on this page.",
+      "editor": "textfield",
+      "isSecret": true
+    },
+    "skipCache": {
+      "title": "Skip Cache",
+      "type": "string",
+      "description": "When \"false\" (default) a successful lookup is cached for seven days and reused, which costs you nothing on a repeated run. Set \"true\" to force a fresh fetch. Sent as a string for Clay compatibility.",
+      "editor": "select",
+      "enum": [
+        "false",
+        "true"
+      ],
+      "enumTitles": [
+        "false (use cache)",
+        "true (force fresh)"
+      ],
+      "default": "false"
+    },
+    "source_tag": {
+      "title": "Source Tag",
+      "type": "string",
+      "description": "Internal attribution tag set by Mamba Labs on published task examples. Not required, and nothing depends on it. Leave it empty.",
+      "editor": "textfield"
+    }
+  }
+}
