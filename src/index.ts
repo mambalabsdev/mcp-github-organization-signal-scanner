@@ -36,12 +36,11 @@ function boolToString(v: boolean | undefined): string | undefined {
   return v === undefined ? undefined : v ? "true" : "false";
 }
 
-// How long the actor run itself is allowed to take, in seconds. 300 s is the
-// run timeout this wrapper has always set (it was the run-sync timeout), kept
-// so a run costs the caller no more than it did before. The difference is that
-// the wrapper now waits for the run's own terminal status instead of an HTTP
-// 408 that arrived while the run kept going and kept billing.
-const ACTOR_RUN_TIMEOUT_SECS = 300;
+// How long the actor run itself is allowed to take, in seconds. One value for
+// every Mamba Labs wrapper, set 2026-10-05: start and poll exists so a long run
+// survives, and a shorter limit would end the long runs it was built for. Past
+// this limit the run ends TIMED-OUT and the caller is told so, with the run id.
+const ACTOR_RUN_TIMEOUT_SECS = 1800;
 
 // memory=512 matches the actor's declared defaultRunOptions.memoryMbytes and
 // is pinned so the run starts at the size the actor asks for: `apify-actor-start`
