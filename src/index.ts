@@ -14,8 +14,6 @@ const pkg = JSON.parse(
 // Distinctive UA so Apify run meta.userAgent marks MCP-originated runs.
 const USER_AGENT = `mambalabs-mcp ${pkg.name}@${pkg.version}`;
 
-const APIFY_TOKEN = process.env.APIFY_TOKEN;
-
 type ToolResult = {
   isError?: boolean;
   content: Array<{ type: "text"; text: string }>;
@@ -38,42 +36,58 @@ function boolToString(v: boolean | undefined): string | undefined {
   return v === undefined ? undefined : v ? "true" : "false";
 }
 
-// actorPath is the actor's IMMUTABLE Apify actor id, not its slug, so a Store
-// rename never breaks these calls.
+// How long the actor run itself is allowed to take, in seconds. 300 s is the
+// run timeout this wrapper has always set (it was the run-sync timeout), kept
+// so a run costs the caller no more than it did before. The difference is that
+// the wrapper now waits for the run's own terminal status instead of an HTTP
+// 408 that arrived while the run kept going and kept billing.
+const ACTOR_RUN_TIMEOUT_SECS = 300;
+
+// memory=512 matches the actor's declared defaultRunOptions.memoryMbytes and
+// is pinned so the run starts at the size the actor asks for: `apify-actor-start`
+// bills once per GB with a minimum of one. Keep this in step with the actor.
+const ACTOR_RUN_MEMORY_MBYTES = 512;
+
+// How long this wrapper waits for that run, in milliseconds. The actor's own
+// timeout plus two minutes, so the run's own TIMED-OUT status is what the
+// caller sees rather than the wrapper giving up first and reporting nothing.
+const WRAPPER_WAIT_MS = (ACTOR_RUN_TIMEOUT_SECS + 120) * 1000;
+const POLL_INTERVAL_MS = 3000;
+
+const TERMINAL = new Set(["SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED", "ABORTING"]);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Shared caller. actorPath is the actor's immutable Apify actor ID (a stable key
+// that survives Store renames). The /v2/acts/{id} endpoint accepts it directly,
+// so a Store rename never breaks these calls.
+//
+// START AND POLL, NOT RUN-SYNC. Apify's synchronous endpoints carry a platform
+// ceiling of 300 seconds on the HTTP wait itself and answer 408 past it whatever
+// the timeout parameter says, so a long run reads as a timeout even though the
+// actor goes on to finish. Starting the run, polling it to a terminal status and
+// then reading the dataset is the only way to wait as long as the actor needs.
+//
+// The token is read here rather than at module load, so the tool registers
+// unconditionally and a server started without APIFY_TOKEN still advertises its
+// capabilities instead of reporting none.
 async function runActor(
   actorPath: string,
   actorLabel: string,
   input: Record<string, unknown>,
 ): Promise<ToolResult> {
+  const APIFY_TOKEN = process.env.APIFY_TOKEN;
   if (!APIFY_TOKEN) {
     return { isError: true, content: [{ type: "text", text: "APIFY_TOKEN is not set. Create a token at https://console.apify.com/account/integrations and set it as the APIFY_TOKEN environment variable." }] };
   }
 
-  // memory=512 is deliberate and matches the actor's declared
-  // defaultRunOptions.memoryMbytes. run-sync-get-dataset-items runs at 2048 MB
-  // unless told otherwise, and `apify-actor-start` bills once per GB with a
-  // minimum of one, so leaving the default in place would charge the caller
-  // more start events per run than the actor asks for. Keep this in step with
-  // the actor's defaultRunOptions.
-  const url = `https://api.apify.com/v2/acts/${actorPath}/run-sync-get-dataset-items?timeout=300&memory=512`;
+  const headers = {
+    Authorization: `Bearer ${APIFY_TOKEN}`,
+    "Content-Type": "application/json",
+    "User-Agent": USER_AGENT,
+  };
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${APIFY_TOKEN}`,
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-      },
-      body: JSON.stringify(input),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { isError: true, content: [{ type: "text", text: `Could not reach the Apify API: ${message}` }] };
-  }
-
-  if (!response.ok) {
+  const httpError = async (response: Response): Promise<string> => {
     let detail = "";
     try {
       const body = (await response.json()) as { error?: { message?: string } };
@@ -81,29 +95,113 @@ async function runActor(
     } catch {
       detail = "";
     }
-
-    let message: string;
     switch (response.status) {
+      case 400:
+        return `The ${actorLabel} run was rejected as invalid input.${detail}`;
       case 401:
-        message = "Invalid Apify token. Check your APIFY_TOKEN environment variable.";
-        break;
+        return "Invalid Apify token. Check your APIFY_TOKEN environment variable.";
       case 402:
-        message = "Insufficient Apify credits. Check your account balance at https://console.apify.com/billing";
-        break;
-      case 408:
-        message = `The ${actorLabel} run timed out after 300 seconds. Try again, or run the actor on Apify directly for longer jobs.`;
-        break;
+        return "Insufficient Apify credits. Check your account balance at https://console.apify.com/billing";
       default:
-        message = `Apify request to ${actorLabel} failed with status ${response.status}.${detail}`;
+        return `Apify request to ${actorLabel} failed with status ${response.status}.${detail}`;
     }
-    return { isError: true, content: [{ type: "text", text: message }] };
+  };
+
+  // 1. Start the run.
+  let started: Response;
+  try {
+    started = await fetch(
+      `https://api.apify.com/v2/acts/${actorPath}/runs?timeout=${ACTOR_RUN_TIMEOUT_SECS}&memory=${ACTOR_RUN_MEMORY_MBYTES}`,
+      { method: "POST", headers, body: JSON.stringify(input) },
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { isError: true, content: [{ type: "text", text: `Could not reach the Apify API: ${message}` }] };
+  }
+  if (!started.ok) {
+    return { isError: true, content: [{ type: "text", text: await httpError(started) }] };
   }
 
-  // A 2xx normally carries the dataset array. Pass actor output through
-  // unchanged: the wrapper must never reinterpret a status field, because
-  // not_extractable, blocked and not_found are different answers and collapsing
-  // them is exactly the defect the actor was built to avoid.
-  const items = await response.json();
+  let run: { id?: string; status?: string; defaultDatasetId?: string };
+  try {
+    run = ((await started.json()) as { data?: typeof run }).data ?? {};
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run start returned a response that could not be parsed: ${message}` }] };
+  }
+  const runId = run.id;
+  if (!runId) {
+    return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run start returned no run id, so there is nothing to wait for.` }] };
+  }
+
+  // 2. Poll to a terminal status.
+  const deadline = Date.now() + WRAPPER_WAIT_MS;
+  let status = run.status ?? "READY";
+  let datasetId = run.defaultDatasetId;
+  while (!TERMINAL.has(status)) {
+    if (Date.now() >= deadline) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `The ${actorLabel} run ${runId} was still ${status} after ${Math.round(WRAPPER_WAIT_MS / 1000)} seconds and this call stopped waiting. The run itself is still on Apify: read it at https://console.apify.com/actors/runs/${runId}` }],
+      };
+    }
+    await sleep(POLL_INTERVAL_MS);
+    let poll: Response;
+    try {
+      poll = await fetch(`https://api.apify.com/v2/actor-runs/${runId}`, { headers });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { isError: true, content: [{ type: "text", text: `Lost contact with the Apify API while waiting for ${actorLabel} run ${runId}: ${message}` }] };
+    }
+    if (!poll.ok) {
+      return { isError: true, content: [{ type: "text", text: await httpError(poll) }] };
+    }
+    const body = (await poll.json()) as { data?: { status?: string; defaultDatasetId?: string } };
+    status = body.data?.status ?? status;
+    datasetId = body.data?.defaultDatasetId ?? datasetId;
+  }
+
+  // 3. A run that did not succeed is a failure the caller must see, never an
+  // empty success. Surfacing it here is what keeps a crashed run from reading
+  // as "no results found".
+  if (status !== "SUCCEEDED") {
+    return {
+      isError: true,
+      content: [{ type: "text", text: `The ${actorLabel} run did not succeed (run ID: ${runId}, status: ${status}).` }],
+    };
+  }
+  if (!datasetId) {
+    return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run ${runId} succeeded but reported no dataset, so there is nothing to return.` }] };
+  }
+
+  // 4. Read the dataset.
+  let ds: Response;
+  try {
+    ds = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?format=json`, { headers });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { isError: true, content: [{ type: "text", text: `Could not read the ${actorLabel} dataset: ${message}` }] };
+  }
+  if (!ds.ok) {
+    return { isError: true, content: [{ type: "text", text: await httpError(ds) }] };
+  }
+
+  let items: unknown;
+  try {
+    items = await ds.json();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run returned a response that could not be parsed: ${message}` }] };
+  }
+
+  if (!Array.isArray(items)) {
+    const asObj = items as { error?: { type?: string; message?: string } };
+    const detail = asObj?.error?.message
+      ? `${asObj.error.message}`
+      : JSON.stringify(items);
+    return { isError: true, content: [{ type: "text", text: `The ${actorLabel} run did not return a dataset. ${detail}` }] };
+  }
+
   return { content: [{ type: "text", text: JSON.stringify(items, null, 2) }] };
 }
 
@@ -138,22 +236,22 @@ server.registerTool(
         .describe("Optional. If you already know the organization login, for example \"stripe\", put it here and the actor skips discovery entirely and goes straight to the API, which is faster and spends fewer of your rate limited requests."),
       includeRepoDetail: z.boolean()
         .optional()
-        .describe("When \"true\" (default) the organization repositories are read and the language, star, activity and SDK signals are derived from them. Set \"false\" to return the organization record only, which is one request instead of several and is much friendlier to the unauthenticated rate limit. Sent as a string for Clay compatibility."),
+        .describe("When true (default) the organization repositories are read and the language, star, activity and SDK signals are derived from them. Set false to return the organization record only, which is one request instead of several and is much friendlier to the unauthenticated rate limit."),
       includeContributorEstimate: z.boolean()
         .optional()
-        .describe("When \"true\" the actor spends one extra request to read the contributor count of the organization most starred repository, as a floor on the size of its public engineering surface. Default \"false\", because one extra request per company is real money against a 60 per hour unauthenticated budget. Sent as a string for Clay compatibility."),
+        .describe("When true the actor spends one extra request to read the contributor count of the organization most starred repository, as a floor on the size of its public engineering surface. Default false, because one extra request per company is real money against a 60 per hour unauthenticated budget."),
       activeWindowDays: z.enum(["30", "90", "180", "365"])
         .optional()
-        .describe("How recently a repository must have been pushed to count as active. 90 days by default. This changes what \"active\" means on the row, so pick the window your own definition of an engaged engineering team uses. Sent as a string for Clay compatibility."),
+        .describe("How recently a repository must have been pushed to count as active. 90 days by default. This changes what \"active\" means on the row, so pick the window your own definition of an engaged engineering team uses."),
       repoPageBudget: z.enum(["1", "2", "3", "5"])
         .optional()
-        .describe("How many pages of 100 repositories to read for a large organization. This is a cost and completeness dial, not a change of answer: the row always reports how many repositories were actually sampled and whether the sample is complete. Sent as a string for Clay compatibility."),
+        .describe("How many pages of 100 repositories to read for a large organization. This is a cost and completeness dial, not a change of answer: the row always reports how many repositories were actually sampled and whether the sample is complete."),
       githubToken: z.string()
         .optional()
-        .describe("YOUR OWN GitHub personal access token, free to create at github.com/settings/tokens with no scopes at all for public data. OPTIONAL: without it the actor runs at GitHub 60 requests per hour, which is enough for a handful of companies and not enough for a list. With it the limit is 5,000 per hour. It is marked secret, so the value never renders on this page."),
+        .describe("YOUR OWN GitHub personal access token, free to create at github.com/settings/tokens with no scopes at all for public data. OPTIONAL: without it the actor runs at GitHub 60 requests per hour, which is enough for a handful of companies and not enough for a list. With it the limit is 5,000 per hour. A token passed here travels in the tool call and stays in the chat transcript, so prefer setting GITHUB_TOKEN in this server's environment: when this argument is omitted the server sends that variable instead."),
       skipCache: z.boolean()
         .optional()
-        .describe("When \"false\" (default) a successful lookup is cached for seven days and reused, which costs you nothing on a repeated run. Set \"true\" to force a fresh fetch. Sent as a string for Clay compatibility."),
+        .describe("When false (default) a successful lookup is cached for seven days and reused, which costs you nothing on a repeated run. Set true to force a fresh fetch."),
     },
   },
   async ({ company_domain, company_name, github_org, includeRepoDetail, includeContributorEstimate, activeWindowDays, repoPageBudget, githubToken, skipCache }) => {
@@ -168,7 +266,7 @@ server.registerTool(
         includeContributorEstimate: boolToString(includeContributorEstimate),
         activeWindowDays,
         repoPageBudget,
-        githubToken,
+        githubToken: githubToken ?? process.env.GITHUB_TOKEN,
         skipCache: boolToString(skipCache),
       }),
     );
