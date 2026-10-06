@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "mcp-github-organization-signal-scanner",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server that resolve a company domain to its GitHub organization with repo, language and activity signals.",
   "author": {
     "name": "Mamba Labs"

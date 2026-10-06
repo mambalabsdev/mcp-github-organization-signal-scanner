@@ -1,6 +1,6 @@
 {
   "name": "@mambalabsdev/mcp-github-organization-signal-scanner",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server for the Mamba Labs GitHub Organization Signal Scanner actor on Apify. Resolve a company domain to its GitHub organization with repo, language and activity signals.",
   "type": "module",
   "bin": {
@@ -38,7 +38,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
