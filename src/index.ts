@@ -218,12 +218,13 @@ server.registerTool(
       "Resolve a company domain to its GitHub organization and return repository count, followers, creation date, top languages, total stars, the most recent push, how many repositories are actively worked on, and whether the company ships a public SDK. Returns one flat Clay ready row. Forks and archived repositories are excluded from the language and star derivations and the exclusion is counted on the row. A rate limited request reports not_extractable and NEVER a zero, because a zero is a number a buyer would filter on. A login that resolves to a personal user account rather than an organization is reported as identity_mismatch. Read only; requires an APIFY_TOKEN and consumes Apify credits per call.",
     annotations: {
       title: "Scan GitHub Organization Signals",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: true,
     },
     inputSchema: {
+      max_charge_usd: z.number().min(0).optional().describe("Optional. The run stops before its event charges pass this amount, for example 2.50. Every row already charged is kept. Leave empty for no cap beyond the maximum cost per run you set in Apify, which is also honored."),
       company_domain: z.string()
         .optional()
         .describe("Bare company domain, for example stripe.com. This is the only required input and it is the join key for every other actor in the fleet."),
@@ -253,11 +254,12 @@ server.registerTool(
         .describe("When false (default) a successful lookup is cached for seven days and reused, which costs you nothing on a repeated run. Set true to force a fresh fetch."),
     },
   },
-  async ({ company_domain, company_name, github_org, includeRepoDetail, includeContributorEstimate, activeWindowDays, repoPageBudget, githubToken, skipCache }) => {
+  async ({ company_domain, company_name, github_org, includeRepoDetail, includeContributorEstimate, activeWindowDays, repoPageBudget, githubToken, skipCache, max_charge_usd }) => {
     return runActor(
       "ahF8RRpv5mzPao5CN",
       "GitHub Organization Signal Scanner",
       compact({
+        max_charge_usd,
         company_domain,
         company_name,
         github_org,
