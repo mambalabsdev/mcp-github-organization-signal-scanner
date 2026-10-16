@@ -1,7 +1,7 @@
 {
   "name": "mcp-github-organization-signal-scanner",
   "displayName": "GitHub Organization Signal Scanner",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "MCP server for the Mamba Labs GitHub Organization Signal Scanner actor on Apify. Resolve a company domain to its GitHub organization with repo, language and activity signals.",
   "author": {
     "name": "Mamba Labs",

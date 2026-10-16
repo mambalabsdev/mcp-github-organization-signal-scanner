@@ -72,6 +72,7 @@ Get your token at https://console.apify.com/account/integrations, paste it in, a
 - `repoPageBudget` (optional): how many pages of 100 repositories to read for a large organization. One of `1`, `2`, `3` or `5`. This is a cost and completeness dial, not a change of answer: the row always reports how many repositories were sampled and whether the sample is complete.
 - `githubToken` (optional): your own GitHub personal access token, free to create with no scopes at all for public data. Without it the tool runs at GitHub's 60 requests per hour, which is enough for a handful of companies and not enough for a list. With it the limit is 5,000 per hour.
 - `skipCache` (optional): when false (the default) a successful lookup is cached for seven days and reused. Set true to force a fresh fetch.
+- `max_charge_usd` (optional): a cost cap in USD for this run. The actor stops before an item that could take its charges past this amount. Omit it to rely on the maximum cost per run set in Apify.
 
 ## Output
 
@@ -120,6 +121,17 @@ The tool returns the actor's flat JSON row for the company, with 32 snake_case f
 - Runs keyless, with your own GitHub token available for scale
 - Rejected candidates recorded in `github_rejected_candidate`
 - 32 flat snake_case fields, one row per company
+
+## Pricing
+
+Price per event on the Apify FREE plan, from the live pricing record; paid Apify plans pay less per event.
+
+| Event | Price (USD) |
+| --- | --- |
+| Actor Start (`apify-actor-start`) | 0.00005 |
+| Company checked (`company-checked`) | 0.003 |
+| Organization resolved (`org-resolved`) | 0.0025 |
+| Repository signals extracted (`repo-signals-extracted`) | 0.003 |
 
 ## Full actor documentation
 
